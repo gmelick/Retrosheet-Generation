@@ -17,6 +17,7 @@ def generate_game_list(json):
             game_list.append(game["gamePk"])
     return game_list
 
+
 def abbreviation_dictionary():
     abbr_dict = dict()
     abbr_dict["LAA"] = "ANA"
