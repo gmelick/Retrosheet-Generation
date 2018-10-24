@@ -18,9 +18,4 @@ def generate_game_list(json):
     return game_list
 
 
-def abbreviation_dictionary():
-    abbr_dict = dict()
-    abbr_dict["LAA"] = "ANA"
-    abbr_dict["BAL"] = "BAL"
-    abbr_dict["BOS"] = "BOS"
 generate()
