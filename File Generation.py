@@ -24,7 +24,8 @@ def generate():
         for play in play_by_play["allPlays"]:
             breakpoints = find_breakpoints(play)
             substitutions = find_substitutions(play)
-            runner_going, runner_out = find_runners(play["runners"])
+            running_on_last_pitch = "steals" in play["result"]["description"]
+            runner_going, runner_out, balk = find_runners(play["runners"], running_on_last_pitch)
             for i in range(len(breakpoints)):
                 file.write(game_key + ",")
                 file.write(away_team + ",")
@@ -37,12 +38,16 @@ def generate():
                 if breakpoints[i] in runner_out:
                     outs = (outs + 1) % 3
 
-                if game_key == "BAL201704080":
+                if game_key == "SLN201705010":
                     print(play)
-                if len(breakpoints) > len(runner_going) and i == len(breakpoints) - 1:
-                    file.write(get_count(play))
+                    print(runner_going)
+                    print(breakpoints)
+                    print(i)
+
+                if len(breakpoints) > len(runner_going) and i == len(breakpoints) - 1 and not running_on_last_pitch:
+                    file.write(get_count(play, breakpoints[i]))
                 else:
-                    file.write(runner_count(play, runner_going[i]))
+                    file.write(runner_count(play, balk, runner_going[i]))
 
                 s = ""
                 if play["result"]["event"] == "Intent Walk" and len(play["pitchIndex"]) == 0:
@@ -128,7 +133,8 @@ def find_breakpoints(play):
     for action in play["actionIndex"]:
         event = play["playEvents"][action]["details"]["event"]
         if first_pitch < action < last_pitch and "Sub" not in event and "Game Advisory" not in event \
-                and "Challenge" not in event and "Injury" not in event:
+                and "Challenge" not in event and "Injury" not in event and "Ejection" not in event\
+                and "Defensive Switch" not in event:
             breakpoints.append(action)
             count = 1
             while first_pitch < action < last_pitch:
@@ -156,10 +162,17 @@ def find_substitutions(play):
     return pitching_changes, pinch_hitters, pinch_runners, defensive_subs
 
 
-def get_count(play):
+def get_count(play, i):
     s = ""
-    balls = play["count"]["balls"]
-    strikes = play["count"]["strikes"]
+    if "Intent Walk" == play["result"]["event"]:
+        balls = play["count"]["balls"]
+        strikes = play["count"]["strikes"]
+    elif len(play["playEvents"]) != 0:
+        balls = play["playEvents"][i]["count"]["balls"]
+        strikes = play["playEvents"][i]["count"]["strikes"]
+    else:
+        balls = play["count"]["balls"]
+        strikes = play["count"]["strikes"]
     if play["result"]["event"] == "Hit By Pitch":
         s += str(balls - 1) + "," + str(strikes) + ","
     else:
@@ -172,9 +185,12 @@ def get_count(play):
     return s
 
 
-def runner_count(play, i):
+def runner_count(play, balk, i):
     s = ""
-    if play["playEvents"][i]["isPitch"]:
+    if i in balk:
+        s += str(play["playEvents"][i]["count"]["balls"]) + ","
+        s += str(play["playEvents"][i]["count"]["strikes"]) + ","
+    elif play["playEvents"][i]["isPitch"]:
         s += make_count(play["playEvents"][i])
     elif i - 1 >= 0 and play["playEvents"][i - 1]["isPitch"]:
         s += make_count(play["playEvents"][i - 1])
@@ -196,7 +212,7 @@ def make_count(play):
     return s
 
 
-def find_runners(runners):
+def find_runners(runners, running_on_last_pitch):
     steal = []
     defensive_indifference = []
     caught_stealing = []
@@ -210,7 +226,10 @@ def find_runners(runners):
     out = []
     for runner in runners:
         event = runner["details"]["event"]
-        index = runner["details"]["playIndex"] - 1
+        if running_on_last_pitch:
+            index = runner["details"]["playIndex"]
+        else:
+            index = runner["details"]["playIndex"] - 1
         if "Stolen Base" in event:
             steal.append(index)
             runner_going.append(index)
@@ -236,11 +255,11 @@ def find_runners(runners):
             pick.append(index)
             runner_going.append(index)
         elif "Balk" in event:
-            balk.append(index)
-            runner_going.append(index)
-        if runner["movement"]["end"] is None:
+            balk.append(index + 1)
+            runner_going.append(index + 1)
+        if runner["movement"]["end"] is None and "DP" not in runner["details"]["event"]:
             out.append(index)
-    return runner_going, out
+    return runner_going, out, balk
 
 
 generate()
