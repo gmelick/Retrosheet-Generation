@@ -143,8 +143,8 @@ def find_breakpoints(play):
 
     for action in play["actionIndex"]:
         event = play["playEvents"][action]["details"]["event"]
-        if (first_pitch < action < last_pitch and "Sub" not in event and "Game Advisory" not in event \
-                and "Challenge" not in event and "Injury" not in event and "Ejection" not in event\
+        if (first_pitch < action < last_pitch and "Sub" not in event and "Game Advisory" not in event
+                and "Challenge" not in event and "Injury" not in event and "Ejection" not in event
                 and "Defensive Switch" not in event) or "Balk" == event:
             breakpoints.append(action)
             first_pitch = new_first_pitch(first_pitch, action, play["pitchIndex"])
