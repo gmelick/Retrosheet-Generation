@@ -3,6 +3,7 @@ import json
 
 
 def generate():
+    skipped = 0
     year = 2017
     file = open(".\\data\\" + str(year) + "cmp.csv", 'w+')
     game_list = generate_game_list(year)
@@ -12,8 +13,10 @@ def generate():
             live_feed = requests.get("https://statsapi.mlb.com/api/v1.1/game/" + str(game_id) + "/feed/live").json()
             play_by_play = requests.get("https://statsapi.mlb.com/api/v1/game/" + str(game_id) + "/playByPlay").json()
         except json.decoder.JSONDecodeError:
+            skipped += 1
             continue
         except requests.exceptions.ChunkedEncodingError:
+            skipped += 1
             continue
 
         game_key = generate_game_key(box_score, live_feed)
@@ -21,8 +24,8 @@ def generate():
         print(game_key)
 
         away_team = box_score["teams"]["away"]["team"]["teamCode"].upper()
-        runners = [[0]*3]*2
-        current_hitters_index = [[0]*9]*2
+        runners = [[0] * 3] * 2
+        current_hitters_index = [[0] * 9] * 2
         hitters_list, fielders_list, current_fielders_list = create_hitter_fielder_dictionaries(box_score)
 
         outs = 0
@@ -30,7 +33,7 @@ def generate():
         for play in play_by_play["allPlays"]:
             breakpoints = find_breakpoints(play)
             substitutions = find_substitutions(play)
-            runner_going, runner_out = find_runners(play["runners"], play["playEvents"])
+            runner_going, runner_out = find_runners(play["runners"], play["playEvents"], play["actionIndex"])
             running_on_last_pitch = running_ends_ab(runner_going, play["actionIndex"], play["pitchIndex"])
             for i in breakpoints:
                 file.write(game_key + ",")
@@ -73,6 +76,7 @@ def generate():
             outs = play["count"]["outs"] % 3
 
     file.close()
+    print("Had to skip " + str(skipped) + " games due to errors")
 
 
 def generate_game_list(year):
@@ -82,7 +86,9 @@ def generate_game_list(year):
 
     for date in json_schedule["dates"]:
         for game in date["games"]:
-            game_list.append(game["gamePk"])
+            team_id = game["teams"]["home"]["team"]["id"]
+            if team_id == 108 or team_id == 109 or team_id == 144:
+                game_list.append(game["gamePk"])
 
     return game_list
 
@@ -113,7 +119,7 @@ def create_hitter_fielder_dictionaries(box_score):
 def create_dictionary(box_score, home_away):
     hitters_dictionary = dict()
     fielders_dictionary = dict()
-    starting_fielders = [0]*10
+    starting_fielders = [0] * 10
     players = box_score["teams"][home_away]["players"]
 
     for player in players:
@@ -143,9 +149,14 @@ def find_breakpoints(play):
 
     for action in play["actionIndex"]:
         event = play["playEvents"][action]["details"]["event"]
-        if (first_pitch < action < last_pitch and "Sub" not in event and "Game Advisory" not in event
-                and "Challenge" not in event and "Injury" not in event and "Ejection" not in event
-                and "Defensive Switch" not in event) or "Balk" == event:
+        if play["result"]["event"] == "Intent Walk":
+            if "Balk" == event or ("Sub" not in event and "Game Advisory" not in event and "Challenge" not in event
+                                   and "Injury" not in event and "Ejection" not in event
+                                   and "Defensive Switch" not in event):
+                breakpoints.append(action)
+        if "Balk" == event or (first_pitch < action < last_pitch and "Sub" not in event and "Game Advisory" not in event
+                               and "Challenge" not in event and "Injury" not in event and "Ejection" not in event
+                               and "Defensive Switch" not in event):
             breakpoints.append(action)
             first_pitch = new_first_pitch(first_pitch, action, play["pitchIndex"])
     breakpoints.append(last_pitch)
@@ -197,7 +208,7 @@ def get_count(play, i):
         s += str(balls - 1) + "," + str(strikes) + ","
     elif "Runner Out" == event:
         s += runner_count(play, i)
-    elif balls == 4:
+    elif balls == 4 or "Intent Walk" == event:
         s += "3," + str(strikes) + ","
     elif strikes == 3:
         s += str(balls) + "," + "2,"
@@ -214,6 +225,10 @@ def runner_count(play, i):
     while index <= i:
         if play["playEvents"][i - index]["isPitch"]:
             s += make_count(play["playEvents"][i - index])
+            break
+        elif index > 0 and "pickoff" == play["playEvents"][i - index]["type"] \
+                and not play["playEvents"][i - index]["details"]["fromCatcher"]:
+            s += get_count(play, i)
             break
         index += 1
 
@@ -238,35 +253,62 @@ def make_count(play):
     return s
 
 
-def find_runners(runners, play_events):
+def find_runners(runners, play_events, action_index):
     runner_going = []
     out = []
 
     for runner in runners:
         event = runner["details"]["event"]
-        index = runner["details"]["playIndex"]
-        if "Stolen Base" in event:
-            runner_going.append(index)
-        elif "Defensive Indiff" in event:
-            runner_going.append(index)
-        elif event.startswith("Caught Stealing"):
-            runner_going.append(index)
-        elif "Wild Pitch" in event:
-            if runner["movement"]["start"] is not None:
-                runner_going.append(index)
-        elif "Passed Ball" in event:
-            if runner["movement"]["start"] is not None:
-                runner_going.append(index)
-        elif "Runner Out" == event:
-            runner_going.append(index)
-        elif event.startswith("Caught Stealing"):
-            runner_going.append(index)
-        elif "Pickoff Caught Stealing" in event:
-            if play_events[index - 1]["details"]["fromCatcher"]:
-                runner_going.append(index)
+        i = runner["details"]["playIndex"]
+        # prev_pitch = False
+
+        if "Wild Pitch" == event or "Passed Ball" == event:
+            runner_going.append(i)
+        elif i > len(play_events) - 1:
+            if play_events[i - 1]["isPitch"] and (play_events[i - 1]["details"]["code"] == "*B"
+                                                  or "runnerGoing" in play_events[i - 1]["details"]):
+                runner_going.append(i)
+        elif "Balk" != event:
+            index = 0
+            while index <= i:
+                if play_events[i - index]["isPitch"] and (play_events[i - index]["details"]["code"] == "*B"
+                                                          or "runnerGoing" in play_events[i - index]["details"]):
+                    runner_going.append(i)
+                    break
+                elif index > 0 and "pickoff" == play_events[i - index]["type"] \
+                        and not play_events[i - index]["details"]["fromCatcher"]:
+                    break
+                index += 1
+
+        # if prev_pitch and i in action_index and event != "Balk" and runner["movement"]["start"] is not None:
+        #     if "credits" in runner:
+        #         if runner["credits"][0]["position"]["code"] != "1":
+        #             runner_going.append(i)
+        #     else:
+        #         runner_going.append(i)
+        # elif "Stolen Base" in event:
+        #     runner_going.append(i)
+        # elif "Defensive Indiff" in event:
+        #     runner_going.append(i)
+        # elif event.startswith("Caught Stealing"):
+        #     if "credits" in runner and runner["credits"][0]["position"]["code"] != "1":
+        #         runner_going.append(i)
+        #     elif "credits" not in runner:
+        #         runner_going.append(i)
+        # elif "Wild Pitch" in event:
+        #     if runner["movement"]["start"] is not None:
+        #         runner_going.append(i)
+        # elif "Passed Ball" in event:
+        #     if runner["movement"]["start"] is not None:
+        #         runner_going.append(i)
+        # elif "Runner Out" == event:
+        #     runner_going.append(i)
+        # elif "Pickoff Caught Stealing" in event:
+        #     if play_events[i - 1]["details"]["fromCatcher"]:
+        #         runner_going.append(i)
 
         if runner["movement"]["end"] is None and "DP" not in runner["details"]["event"]:
-            out.append(index)
+            out.append(i)
 
     return runner_going, out
 
